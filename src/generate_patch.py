@@ -2,40 +2,28 @@
 Authors: Tom Goldstein, Lara Shonkwiler, Ryan Synk, Kathleen Morrison, Xinyi Wang
 06.15.2018
 
-Takes in the parameters of a classification neural net, turns it into a siamese net
-that takes in two images and outputs a measurement of how similar they are
-
-
-1. try to use epoch to adjust learning rate
-2. try to use diff optimizer
-3. try to do one position for like 0.6-0.5, then another position to 0.4,then etc
-
+Updated: Ryan Synk, September 2020
+This script takes in two images a base and a target, and optimizes 
+adversarial patches to be added onto the base in order to increase the
+correlation of the resulting image to the target.
 '''
 
 import random
 import torch
 import torch.nn as nn
-import torch.nn.parallel
 import torch.nn.functional as F
-import torch.backends.cudnn as cudnn
-import torch.distributed as dist
 import torch.optim
-import torch.utils.data
-import torch.utils.data.distributed
 import torchvision
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import torchvision.models as models
 from torch.autograd import Variable
 import numpy as np
 from numpy import linalg
-from scipy.optimize import minimize
 from PIL import Image
-
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
+import argparse
 
-
+# Model class
 class RajeevNet(nn.Module):
     def __init__(self):
         super(RajeevNet, self).__init__()
@@ -57,27 +45,24 @@ class NoOp(nn.Module):
 
 # Creates a verification neural net model from a pre-loaded classification model
 # Input: model_version (string which is a key in the torchvision.models dict) (specifies which pre-loaded classification model)
-def load_model(model_version):
-    # Load a pre-trained renet model.  This model is designed for
+def load_model(model_version, model_path):
+    # Load a pre-trained resnet model.  This model is designed for
     # imagenet, so it outputs 1000 classes.
-    #print("=> using pre-trained model '{}'".format('resnet18')) #UNDO
-    #model = models.__dict__['resnet18'](pretrained=False)
     model = models.__dict__[model_version](pretrained=False)
 
     # Change the architecture to be compatible with the face recognition stuff.
     # The UMD Faces dataset has 8277 classes, so we need to output that many classes.
-    #print('=> Swapping from 1000 to 8277 output classes') #UNDO
     model.avgpool = RajeevNet()
-    model.fc = torch.nn.Linear(512, 8277)
+    model.fc = nn.Linear(512, 8277)
 
     # Load the model parameters from the Carlos' file. To do this, we need to
     # create a DataParallel model of the same format the model was saved in.
     # The DataParallel model is just a wrapper for the original net, and when
     # we load the parameters into the parallel model, it will fill the parameters
     # of the original model that it wraps.
-    #print('=> Loading pre-trained net parameters') #UNDO
-    par_model = torch.nn.DataParallel(model)
-    checkpoint = torch.load('Network_Weights/' + model_version + '_best.pth.tar', map_location='cpu')  # The model was saved on a GPU. We need to tell the model to load to CPU so we don't have issues
+    par_model = nn.DataParallel(model)
+    # The model was saved on a GPU. We need to tell the model to load to CPU so we don't have issues
+    checkpoint = torch.load(model_path + model_version + '_best.pth.tar', map_location='cpu')
     best_prec1 = checkpoint['best_prec1']
     par_model.load_state_dict(checkpoint['state_dict'])
 
@@ -124,64 +109,32 @@ def image_loader(image_name, preprocess):
 # Takes two images, runs them through the network and compares the
 # feature vectors. Also takes in the model and the preprocess
 def correlate(model, preprocess, image1, image2):
-    #hotfix, maybe should do this to the model before it is passed in?
     if torch.cuda.is_available():
-    	model = torch.nn.DataParallel(model).cuda()
+    	model = nn.DataParallel(model).cuda()
 
     im1 = image_loader(image1, preprocess)
     im2 = image_loader(image2, preprocess)
     
     return compare(model(im1),model(im2))
 
-# Loss function defined for do_optimization method. Takes in
-#   a base image, a patch, and a target image.   
-# Plugs patch into the base. Placement location is hard coded because
-#   the patch is plugged into the aggregate base image, so many layered
-#   patches have technically been applied to the base image
-#
-#
-#
-# THOUGHTS:
-# might not need to pass in base image as a parameter because we reload it each time
-# instead pass in the path to the image??
-def loss_fn(base, patch1, x1val, y1val, target, modelStr, patch2, x2val, y2val):
-    print("----")
-    print("inside the loss_fn")
+# Loss function defined for do_optimization method. Takes in a base image, 
+# a patch, and a target image. Plugs patch into the base. Placement location 
+# is hard coded because the patch is plugged into the aggregate base image, 
+# so many layered patches have technically been applied to the base image
+def loss_fn(base, patch1, x1val, y1val, target, modelStr, modelPath, patch2, x2val, y2val):
     
-    
-    ################new things
-    model, preprocessor = load_model('resnet18')
+    #model, preprocessor = load_model('resnet18')
     cuda = torch.cuda.is_available()
-    
-    ryanOriginalCopy = preprocessor(Image.open('/Users/katemorrison/umd_reu/reu_adversarial/ryan_images/ryanface_02.jpg'))
-    ryanOriginalCopy = torch.unsqueeze(ryanOriginalCopy, 0)        
-    #tensor_to_array(ryanOriginalCopy, 'ryanOriginalCopy before application')
-    ################
-    
-    
-    model,_ = load_model(modelStr)
+    model,_ = load_model(modelStr, modelPath)
     
     # Gets the size of the patch from the input tensor
     patch1Size = list(patch1.size())[2]
     patch2Size = list(patch2.size())[2]
     
-    # confirming size of patches
-    #print("patch1Size (width):", patch1Size)
-    #print("patch2Size (width):", patch2Size)
-    
-    
     # plug patches into the base image
-    #baseWithPatch = base
-    baseWithPatch = ryanOriginalCopy
-    
+    baseWithPatch = base
     baseWithPatch[0,0:3,x1val:(patch1Size + x1val),y1val:(patch1Size + y1val)] = patch1
     baseWithPatch[0,0:3,x2val:(patch2Size + x2val),y2val:(patch2Size + y2val)] = patch2
-    
-    
-    ##################new things
-    #tensor_to_array(baseWithPatch, 'baseWithPatch after patch application')
-    #tensor_to_array(ryanOriginalCopy, 'ryanOriginalCopy after patch application')
-
 
     # plug base+patches into the neural net
     predFeatVec = model(baseWithPatch)
@@ -198,45 +151,26 @@ def loss_fn(base, patch1, x1val, y1val, target, modelStr, patch2, x2val, y2val):
     
     return 1 - loss
 
-# Optimization method used for generating adversarial instances to a given
-# neural network.
-def do_optimization(baseImg, targetImg, learn, maxIters, cutOff, modelStr, patchSize, cuda=False):
-    '''
-    ### INPUTS ###
-    
-    baseImg: The image that you start with. Assumes this is a preprocessed,
-    [1,3,227,227] tensor.
+# Optimization method used for generating adversarial instances to a given neural network
+# Input:
+#      - baseImg: image to be misclassified. assumes a [1,3,227,227] tensor
+#      - targetImg: image for patches to be optimized toward. [1,3,227,227] tensor
+#      - learn: learning rate for Adam
+#      - maxIters: max number of iterations for optimization
+#      - cutOff: Cutoff value for correlation between images. Between (0,1)
+#      - modelStr: String used to decied which model is loaded
+#      - patchSize: Integer, size of square patch
+#      - cuda: boolean, whether or not cuda is being used
+#
+# Output:
+#      - misclassImageWithPatch: The base image with two patches applied
+#      - patch: list that contains two randomly placed patches
+#      - finalLoss: loss between misclassImg and targetImg
+def do_optimization(baseImg, targetImg, modelPath, learn=0.01, maxIters=500, cutOff=0.5, modelStr='resnet18', patchSize=50, cuda=False):
 
-    targetImg: The image that baseImg will be classified as. Assumes
-    this is a preprocessed [1,3,227,227] tensor.
-
-    learn: Learning rate for Adam
-
-    maxIters: Maximum number of iterations for the loop (~1000 ??)
-
-    cutOff: The cutoff value for the correlation between two vectors.
-    I.e, how close you'd like the perturbed baseImg to be to the target
-    in feature space. Should be between 0 and 1
-
-    modelStr: String used to decide which model is loaded in load_model
-    
-    patchSize: Currently hardcoded size of square patch
-
-    cuda: Whether or not you want cuda
-
-    ### OUTPUTS ###
-    misclassImageWithPatch: The base image with the two patches applied
-
-    patch: list that contains the two randomly placed patches
-
-    finalLoss: the loss between the misclassImg and the targetImg
-    '''
-    
-    #print("inside the optimization func")
-    
     #Initializations
     torch.set_printoptions(precision=10)
-    model,_ = load_model(modelStr)
+    model,_ = load_model(modelStr, modelPath)
 
     # generate the patches based on parameters
     patch1 = Variable(torch.rand(1,3,patchSize,patchSize), requires_grad = True)
@@ -248,16 +182,13 @@ def do_optimization(baseImg, targetImg, learn, maxIters, cutOff, modelStr, patch
     x2val = random.randint(105, (105+round(0.1*226)))
     y2val = random.randint(130, (130+round(0.1*226)))
   
-    
     baseVar = Variable(baseImg, requires_grad = False)
     targetVar = Variable(targetImg, requires_grad = False)
-    
     
     #Iterates over parameters to make the optimization quicker
     for param in model.parameters():
         param = Variable(param, requires_grad = False)
     
-    # Cuda stuff
     if cuda:
         model.cuda()
         patch1.cuda()
@@ -269,21 +200,15 @@ def do_optimization(baseImg, targetImg, learn, maxIters, cutOff, modelStr, patch
     patch = [patch1,patch2]
     optimizer = torch.optim.Adam(patch, lr = learn)
 
-
-    #tensor_to_array(baseImg, 'baseImg inside opt func, before iterations')
-    #saved_base = baseImg
-    
-
     #Initial correlation
-    loss = loss_fn(baseImg, patch[0], x1val, y1val, targetImg, modelStr, patch[1], x2val, y2val)
-    print('=> Initial correlation: ' + str(-(loss - 1)))
+    loss = loss_fn(baseImg, patch[0], x1val, y1val, targetImg, modelStr, modelPath, patch[1], x2val, y2val)
+    print('=> Initial correlation: ' + str((-(loss - 1)).item()))
 
-    #Begins actual optimization
+    #Begins optimization
     for iteration in range(maxIters):
         
         if (loss < cutOff):
             break
-        
         else:
             # location of patches is random, but centered on the cheeks
             x1val = random.randint(105, (105+round(0.1*226)))
@@ -291,8 +216,8 @@ def do_optimization(baseImg, targetImg, learn, maxIters, cutOff, modelStr, patch
             x2val = random.randint(105, (105+round(0.1*226)))
             y2val = random.randint(130, (130+round(0.1*226)))
             
-            loss = loss_fn(baseVar, patch[0], x1val, y1val, targetVar, modelStr, patch[1], x2val, y2val)
-            print('=> current loss: ' + str(loss))
+            loss = loss_fn(baseVar, patch[0], x1val, y1val, targetVar, modelStr, modelPath, patch[1], x2val, y2val)
+            print('=> iteration: ' + str(iteration) + ' | current loss: ' + str(loss.item()))
             
             if (loss < cutOff):
                 break
@@ -301,18 +226,7 @@ def do_optimization(baseImg, targetImg, learn, maxIters, cutOff, modelStr, patch
             loss.backward(retain_graph = True) #It needs this for some reason
             optimizer.step()
     
-    #Warning message
-    if (iteration == (maxIters - 1)):
-        print("\n")
-        print('Warning: optimization loop ran for the maximum number of' + 
-            ' iterations. The result may not be correct')
-    
-        
     misclassImageWithPatch = baseImg
-    #tensor_to_array(misclassImageWithPatch, 'Ryan inside opt func')
-    
-    # apply final two patches to base image
-    # this step seems to be unnecessary
     misclassImageWithPatch[0,0:3,x1val:(patchSize + x1val),y1val:(patchSize + y1val)] = patch[0]
     misclassImageWithPatch[0,0:3,x2val:(patchSize + x2val),y2val:(patchSize + y2val)] = patch[1]
     
@@ -340,41 +254,34 @@ def tensor_to_array(tens, figTitle):
     plt.title(figTitle)
     plt.show()
 
-######## code to actually execute the entire program
 def main():
+    parser = argparse.ArgumentParser(description='Give two images')
+    parser.add_argument('--im1', '--image_path_1',
+                        default='../images/Test_Images/GroupMemberImages/ryan_images/ryanface_01.jpg', 
+                        help='path to base image')
+    parser.add_argument('--im2', '--image_path_2',
+                        default='../images/Test_Images/CelebrityImages/john_mayer/john_mayer_0001.jpg', 
+                        help='path to target image')
+    parser.add_argument('model_path')
+    args = parser.parse_args()
     
-    model, preprocessor = load_model('resnet18')
+    # load model and images
+    model, preprocessor = load_model('resnet18', args.model_path)
     cuda = torch.cuda.is_available()
+    base = preprocessor(Image.open(args.im1))
+    target = preprocessor(Image.open(args.im2))
 
-    kateImg = preprocessor(Image.open('/Users/katemorrison/umd_reu/reu_adversarial/kate_images/pic1kate.jpg'))
-    ryanImg = preprocessor(Image.open('/Users/katemorrison/umd_reu/reu_adversarial/ryan_images/ryanface_02.jpg'))
-
-    ryanKateCorrOrg = compare(model(torch.unsqueeze(ryanImg, 0)), model(torch.unsqueeze(kateImg, 0)))
-
-    print("initial correlation of base and target: ", ryanKateCorrOrg)
-    
-    misclassWithPatch, patch, finalLoss = do_optimization(torch.unsqueeze(ryanImg, 0), 
-                                                     torch.unsqueeze(kateImg, 0), 
-                                                     learn=1, maxIters=0, cutOff=.3, modelStr='resnet18', patchSize=50,
-                                                     cuda = cuda)
+    # perform optimization
+    misclassWithPatch, patch, finalLoss = do_optimization(torch.unsqueeze(base, 0), 
+                                                     torch.unsqueeze(target, 0), args.model_path, cuda = cuda)
 
     # saving patch and base+patch
-    torch.save(patch, 'patches/patch.pt')
-    torch.save(misclassWithPatch, 'patches/misclassWithPatch.pt')
+    torch.save(patch, '../patches/patch.pt')
+    torch.save(misclassWithPatch, '../patches/misclassWithPatch.pt')
 
     # printing out the image
-    misclassWithPatch = torch.load('patches/misclassWithPatch.pt')
-    tensor_to_array(misclassWithPatch, 'Pic of Ryan With Patch')
-    
-    # adds a dimension to the vector
-    #ryanSaved = torch.unsqueeze(ryanSaved, 0)
-    # ryanSaved unfortunately does not keep the original pic if the patch is ever applied to it
-    #tensor_to_array(ryanSaved, 'Pic of RyanSaved Without Patch')
-    
-    # adds a dimension to the vector
-    #kateImg.unsqueeze_(0)
-    #tensor_to_array(kateImg, 'Pic of Kate')
+    misclassWithPatch = torch.load('../patches/misclassWithPatch.pt')
+    tensor_to_array(misclassWithPatch, 'Base Pic With Patch')
 
-
-#main()
-
+if __name__ == "__main__":
+    main()
