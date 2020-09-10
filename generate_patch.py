@@ -231,11 +231,9 @@ def do_optimization(baseImg, targetImg, modelPath, learn=0.01, maxIters=500, cut
     misclassImageWithPatch[0,0:3,x2val:(patchSize + x2val),y2val:(patchSize + y2val)] = patch[1]
     
     patch = [patch[0],patch[1]]
-    finalLoss = loss
-    print("\n")
-    print("finalLoss: ", finalLoss)
+    print('=> iteration: ' + str(iteration) + ' | final loss: ' + str(loss.item()))
 
-    return misclassImageWithPatch, patch, finalLoss
+    return misclassImageWithPatch, patch, loss
 
 
 # Converts a 1x3x227x227 tensor into a numpyarray that can
@@ -257,30 +255,30 @@ def tensor_to_array(tens, figTitle):
 def main():
     parser = argparse.ArgumentParser(description='Give two images')
     parser.add_argument('--im1', '--image_path_1',
-                        default='../images/Test_Images/GroupMemberImages/ryan_images/ryanface_01.jpg', 
+                        default='./images/Test_Images/GroupMemberImages/ryan_images/ryanface_01.jpg', 
                         help='path to base image')
     parser.add_argument('--im2', '--image_path_2',
-                        default='../images/Test_Images/CelebrityImages/john_mayer/john_mayer_0001.jpg', 
+                        default='./images/Test_Images/CelebrityImages/john_mayer/john_mayer_0001.jpg', 
                         help='path to target image')
-    parser.add_argument('model_path')
+    parser.add_argument('--m_path','--model_path', default='./networks/')
     args = parser.parse_args()
     
     # load model and images
-    model, preprocessor = load_model('resnet18', args.model_path)
+    model, preprocessor = load_model('resnet18', args.m_path)
     cuda = torch.cuda.is_available()
     base = preprocessor(Image.open(args.im1))
     target = preprocessor(Image.open(args.im2))
 
     # perform optimization
     misclassWithPatch, patch, finalLoss = do_optimization(torch.unsqueeze(base, 0), 
-                                                     torch.unsqueeze(target, 0), args.model_path, cuda = cuda)
+                                                     torch.unsqueeze(target, 0), args.m_path, cuda = cuda)
 
     # saving patch and base+patch
-    torch.save(patch, '../patches/patch.pt')
-    torch.save(misclassWithPatch, '../patches/misclassWithPatch.pt')
+    torch.save(patch, './patches/patch.pt')
+    torch.save(misclassWithPatch, './patches/misclassWithPatch.pt')
 
     # printing out the image
-    misclassWithPatch = torch.load('../patches/misclassWithPatch.pt')
+    misclassWithPatch = torch.load('./patches/misclassWithPatch.pt')
     tensor_to_array(misclassWithPatch, 'Base Pic With Patch')
 
 if __name__ == "__main__":

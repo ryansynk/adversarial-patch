@@ -8,6 +8,17 @@ github page.
 This repository contains code written by Ryan Synk, Lara Shonkwiler, Kate Morrison, Xinyi Wang and Carlos Castillo. Credit for this work is spread evenly among 
 those names listed, as well as Prof. Tom Goldstein, who directed the group.
 
+## Directions to Generate Adversarial Patch
+
+The generate\_patch.py script takes a neural network, a base image, and a target image, and optimizes a small, square patch. 
+This patch, when overlayed on top of the base image, causes the network to interpret the image as the target. 
+To generate a patch, simply clone the repository and run the "generate\_patch.py" script. To run the script with images of your choosing,
+pass them in as parameters on the command line. The default should show something like this
+
+<p align="center">
+    <img src="./images/Figure_1.png">
+</p>
+
 ## Directions for Generating Images
 
 This software uses [UMDFaces](https://www.umdfaces.io) and [Pytorch](https://www.pytorch.org) to train deep networks for face recognition.
